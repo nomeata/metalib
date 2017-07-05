@@ -44,15 +44,15 @@ Fixpoint apply_heap (h : heap) (e : exp) : exp  :=
   | (x , e') :: h' => apply_heap h' ([x ~> nom_to_exp e'] e)
   end.
 
-Fixpoint apply_stack h (s : list frame) (e :exp) : exp :=
+Fixpoint apply_stack (s : list frame) (e :exp) : exp :=
   match s with
   | nil => e
-  | n_app2 e' :: s' => apply_stack h s' (app e (apply_heap h (nom_to_exp e')))
+  | n_app2 e' :: s' => apply_stack s' (app e (nom_to_exp e'))
   end.
 
 Definition decode (c:conf) : exp  :=
   match c with
-  | (h,e,s) => apply_stack h s (apply_heap h (nom_to_exp e))
+  | (h,e,s) => apply_heap h (apply_stack s (nom_to_exp e))
   end.
 
 
@@ -106,8 +106,8 @@ Hint Resolve apply_heap_lc : lngen.
     through. *)
 
 (* SOLUTION *)
-Lemma apply_stack_lc : forall s h e,
-    lc_exp e -> lc_exp (apply_stack h s e).
+Lemma apply_stack_lc : forall s e,
+    lc_exp e -> lc_exp (apply_stack s e).
 Proof.
   induction s; try destruct a; simpl in *; auto with lngen.
 Qed.
@@ -187,12 +187,18 @@ Qed.
  *)
 
 
-Lemma apply_stack_cong : forall s h e e',
+Lemma apply_stack_cong : forall s e e',
     step e e' ->
-    step (apply_stack h s e) (apply_stack h s e').
+    step (apply_stack s e) (apply_stack s e').
 Proof.
   induction s; intros; try destruct a; simpl in *; auto with lngen.
 Qed.
+
+Lemma apply_heap_cong : forall h e e',
+    step e e' ->
+    step (apply_heap h e) (apply_heap h e').
+Proof.
+Admitted.
 
 
 (***********************************************************************)
@@ -255,6 +261,13 @@ Proof.
     rewrite scoped_get with (D2:= dom h\u D ); eauto with lngen.
 Qed. (* /ADMITTED *)
 
+Lemma heap_get_subst :
+    forall D h x e1 e2,
+    scoped_heap D h ->
+    get x h = Some e2 ->
+    apply_heap h e1 = apply_heap h ([x ~> nom_to_exp e2] e1).
+Admitted.
+
 (***********************************************************************)
 (** * Scoped stacks                                                    *)
 (***********************************************************************)
@@ -268,22 +281,23 @@ Fixpoint fv_stack s :=
     nil => {}
   | n_app2 e :: s => fv_exp (nom_to_exp e) \u fv_stack s
   end.
+  
+(* We can substitute past a stack if the variable is fresh with
+   regard to the stack. *)
 
-(** Stacks that are well-scoped can discard irrelevant bindings
-    from the heap. *)
+Lemma subst_stack:
+  forall x e1 e2 s,
+  (* TODO: Precondition: x fresh in s *)
+  [x ~> e1] apply_stack s e2 = apply_stack s ([x ~> e1] e2).
+Admitted.
 
-(* LATER *)
-(* TODO: how do we get inductive proofs to automatically
-   rewrite with the IH? *)
-(* /LATER *)
-Lemma apply_stack_fresh_eq : forall s x e1 h ,
-    x `notin` fv_stack s ->
-    apply_stack ((x, e1) :: h) s = apply_stack h s.
-Proof.
-  induction s; intros; try destruct a; simpl in *; auto with lngen.
-  rewrite subst_exp_fresh_eq; auto.
-  rewrite IHs; auto.
-Qed.
+Lemma subst_stack_dup:
+  forall x e1 e2 s,
+  (* TODO: Precondition: x fresh in e1 *)
+  [x ~> e1] apply_stack s e2 = [x ~> e1] (apply_stack s ([x ~> e1] e2)).
+Admitted.
+
+
 
 (***********************************************************************)
 (** * Connecting "freshening" *)
@@ -470,46 +484,41 @@ Proof.
   - destruct f eqn:?.
     + destruct e eqn:?; try solve [inversion STEP].
        right.
-       destruct AtomSetProperties.In_dec;
-       try destruct atom_fresh;
-       inversion STEP; subst; clear STEP;
-       simpl in *;
-       rewrite combine;
-       rewrite apply_stack_fresh_eq; auto; try fsetdec;
-       apply apply_stack_cong;
-       autorewrite with lngen in *;
-       simpl.
-
-       -- assert (x <> x0) by fsetdec.
-          rewrite <- swap_spec; auto; try fsetdec.
-          rewrite (subst_exp_spec _ _ x).
-          autorewrite with lngen; auto with lngen.
-          default_simp.
-          rewrite subst_exp_fresh_eq; autorewrite with lngen; auto.
-
-          apply step_beta; auto with lngen.
-          rewrite <- apply_heap_abs.
-          eapply apply_heap_lc.
-          auto with lngen.
-
-          rewrite H4. fsetdec.
-       -- rewrite subst_exp_spec.
-          rewrite apply_heap_open; auto with lngen.
-
-          apply step_beta; auto with lngen.
-          rewrite <- apply_heap_abs.
-          eapply apply_heap_lc.
-          auto with lngen.
+       destruct AtomSetProperties.In_dec.
+       * try destruct atom_fresh.
+         inversion STEP; subst; clear STEP.
+         simpl in *.
+         autorewrite with lngen in *.
+         assert (x <> x0) by fsetdec.
+         rewrite subst_stack.
+         rewrite <- swap_spec ; try fsetdec.
+         rewrite (subst_exp_spec _ _ x).
+         autorewrite with lngen; auto with lngen.
+         simpl. default_simp.
+         rewrite subst_exp_fresh_eq; autorewrite with lngen; auto; try fsetdec.
+         apply apply_heap_cong.
+         apply apply_stack_cong.
+         apply step_beta; auto with lngen.
+       * try destruct atom_fresh.
+         inversion STEP; subst; clear STEP.
+         simpl in *.
+         autorewrite with lngen in *.
+         rewrite subst_stack.
+         rewrite (subst_exp_spec _ _ x).
+         apply apply_heap_cong.
+         apply apply_stack_cong.
+         apply step_beta; auto with lngen.
 
   - destruct e eqn:?; try solve [inversion STEP].
     + destruct (get x h) eqn:?; inversion STEP; subst; clear STEP.
       left.
-      f_equal.
-      apply apply_heap_get with (D:= D); auto.
+      rewrite (heap_get_subst D _ _ _ _ H3 Heqo); auto.
+      rewrite subst_stack_dup.
+      rewrite <- (heap_get_subst D _ _ _ _ H3 Heqo); auto.
+      simpl. default_simp.
     + inversion STEP; subst; clear STEP.
       left.
       simpl.
-      rewrite apply_heap_app.
       auto.
 Qed.
 
@@ -560,20 +569,23 @@ destruct (x == x0). inversion H.
 eauto.
 Qed.
 
-Lemma no_step_stack : forall s h e0,
-  not (is_value e0) ->
-  not (exists e0', step e0 e0') ->
-  not (exists e1, step (apply_stack h s e0) e1).
+Lemma no_step_stack : forall h s e0,
+  not (is_value (apply_heap h e0)) ->
+  not (exists e0', step (apply_heap h e0) e0') ->
+  not (exists e1, step (apply_heap h (apply_stack s e0)) e1).
 Proof.
   induction s; intros; try destruct a; simpl in *; auto.
   intros [e1 STEP].
-  assert (K1: not (exists e1', step (app e0 (apply_heap h (nom_to_exp n))) e1')).
-  { intros [e1' SS].
-    inversion SS. subst. simpl in *. contradiction.
-    subst. eauto. }
-  assert (K2: not (is_value (app e0 (apply_heap h (nom_to_exp n))))).
-  { simpl. auto. }
-  pose (K := IHs h _ K2 K1). clearbody K.
+  assert (K1: not (exists e1', step (apply_heap h (app e0 (nom_to_exp n))) e1')).
+  { clear IHs. clear STEP.
+    intros [e1' SS].
+    rewrite apply_heap_app in *.
+    inversion SS. 
+    - rewrite <- H1 in H. simpl in *. contradiction.
+    - subst. eauto. }
+  assert (K2: not (is_value (apply_heap h (app e0 (nom_to_exp n))))).
+  { simpl. rewrite apply_heap_app in *. auto. }
+  pose (K := IHs _ K2 K1). clearbody K.
   eauto.
 Qed.
 (* /SOLUTION *)
@@ -598,9 +610,12 @@ Proof.
     destruct (get x h) eqn:?. inversion H.
     intros [e0 STEP].
     simpl in *.
-    rewrite apply_heap_get_none in STEP; auto.
-    eapply no_step_stack with (e0 := var_f x); auto.
-       intros [e0' SS]. inversion SS. eauto.
+    eapply no_step_stack with (e0 := var_f x) (h := h).
+      * rewrite apply_heap_get_none; try auto.
+      * intros [e0' SS].
+        rewrite apply_heap_get_none in SS; try auto.
+        inversion SS.
+      * eauto.
 Qed. (* /ADMITTED *)
 
 (***********************************************************************)
