@@ -198,8 +198,18 @@ Lemma apply_heap_cong : forall h e e',
     step e e' ->
     step (apply_heap h e) (apply_heap h e').
 Proof.
-Admitted.
-
+  induction h; intros; try destruct a; 
+  simpl in *; auto with lngen.
+  apply IHh.
+  induction H; simpl in *.
+  - default_simp.
+    rewrite subst_exp_open_exp_wrt_exp; auto with lngen.
+    apply step_beta; auto with lngen.
+    pick fresh x.
+    apply lc_abs_exists with (x1 := x); intros.
+    rewrite subst_exp_open_exp_wrt_exp_var; auto with lngen.
+  - apply step_app; auto with lngen.
+Qed.
 
 (***********************************************************************)
 (** * Scoped heaps                                                     *)
@@ -261,12 +271,56 @@ Proof.
     rewrite scoped_get with (D2:= dom h\u D ); eauto with lngen.
 Qed. (* /ADMITTED *)
 
+
+Lemma heap_get_fresh:
+    forall D h x e2,
+    scoped_heap D h ->
+    get x h = Some e2 ->
+    x `notin` fv_exp (nom_to_exp e2).
+Proof.
+  induction 1;  intros; default_simp.
+  fsetdec.
+Qed.
+
+Lemma dup_subst_eq:
+  forall x e1 e2,
+  x `notin` fv_exp e1 ->
+  [x ~> e1] ([x ~> e1] e2) = ([x ~> e1] e2).
+Proof.
+  intros.
+  rewrite subst_exp_fresh_eq; auto.
+  auto with lngen.
+Qed.
+
+Lemma dup_subst_subst:
+  forall x1 x2 e1 e2 e3,
+  x1 <> x2 ->
+  x1 `notin` fv_exp e1 ->
+  x2 `notin` fv_exp e1 ->
+  [x1 ~> e1] ([x2 ~> e2] e3)
+  = [x1 ~> e1] ([x2 ~> e2] ([x1 ~> e1] e3)).
+Proof.
+  intros.
+  rewrite subst_exp_subst_exp with (x1 := x1) (e2 := e1); auto with lngen.
+  rewrite subst_exp_subst_exp with (x1 := x1) (e2 := e1); auto with lngen.
+  rewrite dup_subst_eq; auto with lngen.
+Qed.
+
 Lemma heap_get_subst :
     forall D h x e1 e2,
     scoped_heap D h ->
     get x h = Some e2 ->
     apply_heap h e1 = apply_heap h ([x ~> nom_to_exp e2] e1).
-Admitted.
+Proof.
+  intros; generalize dependent e1;
+  induction H; intros; default_simp.
+  - rewrite dup_subst_eq; auto with lngen; fsetdec.
+  - rewrite IHscoped_heap; auto.
+    rewrite dup_subst_subst; auto.
+    rewrite <- IHscoped_heap; auto with lngen.
+    apply heap_get_fresh with (D := D) (h := h); auto with lngen.
+    rewrite scoped_get with (D2:= dom h\u D ); eauto with lngen.
+Qed.
 
 (***********************************************************************)
 (** * Scoped stacks                                                    *)
@@ -287,17 +341,31 @@ Fixpoint fv_stack s :=
 
 Lemma subst_stack:
   forall x e1 e2 s,
-  (* TODO: Precondition: x fresh in s *)
+  x `notin` fv_stack s ->
   [x ~> e1] apply_stack s e2 = apply_stack s ([x ~> e1] e2).
-Admitted.
+Proof.
+  intros.
+  generalize dependent e2.
+  induction s; try destruct a; default_simp; try auto.
+  rewrite IHs; auto with lngen.
+  default_simp.
+  rewrite subst_exp_fresh_eq with (e2 := nom_to_exp n); auto with lngen.
+Qed.
 
 Lemma subst_stack_dup:
   forall x e1 e2 s,
-  (* TODO: Precondition: x fresh in e1 *)
+  x `notin` fv_exp e1 ->
   [x ~> e1] apply_stack s e2 = [x ~> e1] (apply_stack s ([x ~> e1] e2)).
-Admitted.
-
-
+Proof.
+  intros.
+  generalize dependent e2.
+  induction s; try destruct a; default_simp; try auto.
+  - rewrite dup_subst_eq; auto.
+  - rewrite IHs with (e2 := (app ([_ ~> _] _) _)); auto with lngen.
+    rewrite IHs with (e2 := (app e2 _)); auto with lngen.
+    default_simp.
+    rewrite dup_subst_eq; auto.
+Qed.
 
 (***********************************************************************)
 (** * Connecting "freshening" *)
@@ -490,7 +558,7 @@ Proof.
          simpl in *.
          autorewrite with lngen in *.
          assert (x <> x0) by fsetdec.
-         rewrite subst_stack.
+         rewrite subst_stack; try fsetdec.
          rewrite <- swap_spec ; try fsetdec.
          rewrite (subst_exp_spec _ _ x).
          autorewrite with lngen; auto with lngen.
@@ -503,7 +571,7 @@ Proof.
          inversion STEP; subst; clear STEP.
          simpl in *.
          autorewrite with lngen in *.
-         rewrite subst_stack.
+         rewrite subst_stack; try fsetdec.
          rewrite (subst_exp_spec _ _ x).
          apply apply_heap_cong.
          apply apply_stack_cong.
@@ -513,7 +581,7 @@ Proof.
     + destruct (get x h) eqn:?; inversion STEP; subst; clear STEP.
       left.
       rewrite (heap_get_subst D _ _ _ _ H3 Heqo); auto.
-      rewrite subst_stack_dup.
+      rewrite subst_stack_dup by (apply heap_get_fresh with (D := D) (h := h'); auto).
       rewrite <- (heap_get_subst D _ _ _ _ H3 Heqo); auto.
       simpl. default_simp.
     + inversion STEP; subst; clear STEP.
